@@ -20,13 +20,12 @@ image:
 		--build-arg GOPRIVATE=$(GONOSUMDB) \
 		-t faustvx/todo_server:v1 -f ./Dockerfile .
 
-
-build:
- 	docker build --tag faustvx/todo_server:v1 .
-
-test:
-	docker run go clean -testcache
-	docker run --rm faustvx/todo_server:v1 go test -v ./...
-
 run:
 	docker run -p 7540:7540 faustvx/todo_server:v1
+
+# build:
+#  	docker build -t faustvx/todo_server:v1  .
+
+# test:
+# 	docker run go clean -testcache
+# 	docker run --rm faustvx/todo_server:v1 go test -v ./...

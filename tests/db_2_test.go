@@ -24,8 +24,8 @@ func count(db *sqlx.DB) (int, error) {
 }
 
 func openDB(t *testing.T) *sqlx.DB {
-	dbfile := DBFile
-	envFile := os.Getenv("." + "TODO_DBFILE")
+	dbfile := "." + DBFile
+	envFile := "." + os.Getenv("TODO_DBFILE") // была ошибка в тесте os.Getenv("." + "TODO_DBFILE") переменной среды, начинающейся с точки нет :)
 	if len(envFile) > 0 {
 		dbfile = envFile
 	}
