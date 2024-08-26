@@ -9,7 +9,7 @@
 Сервер работает на url http://localhost:7540/
 Все необходимые переменные среды настроены в .vscode/settings.json, так же они содержатся в .env и настроены в докер-файле
 TODO_PORT=7540 - порт на котором работает сервис
-TODO_DBFILE=./database/scheduler.db - путь к файлу БД
+TODO_DBFILE=./scheduler.db - путь к файлу БД
 TODO_PASSWORD=123 - пароль
 
 Сборка образа и запуск контейнера прописаны в Makefile

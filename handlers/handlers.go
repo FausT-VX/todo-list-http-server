@@ -18,7 +18,10 @@ import (
 	"github.com/FausT-VX/todo-list-server/models"
 	"github.com/FausT-VX/todo-list-server/service/scheduler"
 	"github.com/golang-jwt/jwt"
+	"github.com/jmoiron/sqlx"
 )
+
+var DB *sqlx.DB //Dbinstance
 
 type Claims struct {
 	Exp      int64  `json:"exp"`
@@ -27,6 +30,15 @@ type Claims struct {
 }
 
 var jwtSecretKey = []byte("very-secret-key")
+
+// DBinit инициализирует базу данных в пакете handlers
+func DBinit(db *sqlx.DB) {
+	DB = db
+}
+
+func DBclose() {
+	DB.Close()
+}
 
 // NextDateHandler получает следующую дату повторения задачи по переданным в http-запросе параметрам
 // now, date, repeat
@@ -92,7 +104,7 @@ func GetTasks(w http.ResponseWriter, r *http.Request) {
 	tasks := []models.JsonTask{}
 	task := models.JsonTask{}
 	// Выполняем подготовленный запрос
-	rows, err := database.DB.NamedQuery(query, args)
+	rows, err := DB.NamedQuery(query, args)
 	if err != nil {
 		http.Error(w, errorJSON(err), http.StatusInternalServerError)
 		return
@@ -134,7 +146,7 @@ func GetTaskByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	task, err := database.GetTaskByID(id)
+	task, err := database.GetTaskByID(DB, id)
 	if err != nil {
 		http.Error(w, errorJSON(err), http.StatusInternalServerError)
 		return
@@ -211,7 +223,7 @@ func PostTask(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	resultDB, err := database.DB.NamedExec("INSERT INTO scheduler (date, title, comment, repeat) VALUES (:date, :title, :comment, :repeat)", &task)
+	resultDB, err := DB.NamedExec("INSERT INTO scheduler (date, title, comment, repeat) VALUES (:date, :title, :comment, :repeat)", &task)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -255,7 +267,7 @@ func PostTaskDone(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// получаем задачу из БД по ID
-	task, err := database.GetTaskByID(id)
+	task, err := database.GetTaskByID(DB, id)
 	if err != nil {
 		http.Error(w, errorJSON(err), http.StatusInternalServerError)
 		return
@@ -263,7 +275,7 @@ func PostTaskDone(w http.ResponseWriter, r *http.Request) {
 	log.Printf("Handler PostTaskDone: id = %v; task = %v\n", id, task)
 
 	if strings.TrimSpace(task.Repeat) == "" {
-		if err := database.DeleteTaskByID(id); err != nil {
+		if err := database.DeleteTaskByID(DB, id); err != nil {
 			http.Error(w, errorJSON(err), http.StatusInternalServerError)
 			return
 		} else {
@@ -282,7 +294,7 @@ func PostTaskDone(w http.ResponseWriter, r *http.Request) {
 
 	}
 
-	_, err = database.DB.NamedExec("UPDATE scheduler SET date = :date, title = :title, comment = :comment, repeat = :repeat WHERE id = :id", &task)
+	_, err = DB.NamedExec("UPDATE scheduler SET date = :date, title = :title, comment = :comment, repeat = :repeat WHERE id = :id", &task)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -330,7 +342,7 @@ func PutTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Проверяем, существует ли задача с указанным ID в базе
-	if _, err := database.GetTaskByID(id); err != nil {
+	if _, err := database.GetTaskByID(DB, id); err != nil {
 		http.Error(w, errorJSON(err), http.StatusBadRequest)
 		return
 	}
@@ -370,7 +382,7 @@ func PutTask(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	_, err = database.DB.NamedExec("UPDATE scheduler SET date = :date, title = :title, comment = :comment, repeat = :repeat WHERE id = :id", &task)
+	_, err = DB.NamedExec("UPDATE scheduler SET date = :date, title = :title, comment = :comment, repeat = :repeat WHERE id = :id", &task)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -401,7 +413,7 @@ func DeleteTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	log.Printf("Handler DeleteTask: id = %v\n", id)
-	if err := database.DeleteTaskByID(id); err != nil {
+	if err := database.DeleteTaskByID(DB, id); err != nil {
 		http.Error(w, errorJSON(err), http.StatusInternalServerError)
 		return
 	}

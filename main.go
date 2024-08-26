@@ -20,7 +20,7 @@ const Port = ":7540"
 const WebDir = "./web"
 
 // Путь к базе данных
-const DbPath = "./database/scheduler.db"
+const DbPath = "./scheduler.db"
 
 func main() {
 	log.SetFlags(log.LstdFlags)
@@ -28,11 +28,12 @@ func main() {
 	log.Println("Starting application...")
 
 	// Соединение с базой данных
-	if err := database.ConnectDB(DbPath); err != nil {
+	db, err := database.ConnectDB(DbPath)
+	if err != nil {
 		log.Println(err)
 		return
 	}
-
+	handlers.DBinit(db)
 	// инициализация маршрутизатора
 	router := chi.NewRouter()
 
@@ -97,7 +98,7 @@ func main() {
 	// 	c.File(WebDir + "/index.html")
 	// })
 
-	port := ":" + os.Getenv("TODO_PORT") // #TODO: НЕ ЗАБЫТЬ ПРИ СБОРКЕ ДОКЕР-ОБРАЗА ДОБАВИТЬ В ПЕРЕМЕННЫЕ ОКРУЖЕНИЯ
+	port := ":" + os.Getenv("TODO_PORT")
 	if port == ":" {
 		port = Port
 	}
@@ -105,6 +106,8 @@ func main() {
 	log.Printf("Starting server on port %s...\n", port)
 	if err := http.ListenAndServe(port, router); err != nil {
 		log.Printf("Start server error: %s", err.Error())
+		handlers.DBclose()
 		return
 	}
+	handlers.DBclose()
 }
