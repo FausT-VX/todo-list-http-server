@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -17,27 +16,19 @@ import (
 	"github.com/FausT-VX/todo-list-server/database"
 	"github.com/FausT-VX/todo-list-server/models"
 	"github.com/FausT-VX/todo-list-server/service/scheduler"
+	"github.com/FausT-VX/todo-list-server/settings"
 	"github.com/golang-jwt/jwt"
 	"github.com/jmoiron/sqlx"
 )
 
-var DB *sqlx.DB //Dbinstance
-
 type Claims struct {
-	Exp      int64  `json:"exp"`
+	//Exp      int64  `json:"exp"`
 	Checksum string `json:"checksum"`
 	jwt.StandardClaims
 }
 
-var jwtSecretKey = []byte("very-secret-key")
-
-// DBinit инициализирует базу данных в пакете handlers
-func DBinit(db *sqlx.DB) {
-	DB = db
-}
-
-func DBclose() {
-	DB.Close()
+type TaskID struct {
+	ID int64 `json:"id"`
 }
 
 // NextDateHandler получает следующую дату повторения задачи по переданным в http-запросе параметрам
@@ -51,376 +42,349 @@ func NextDateHandler(w http.ResponseWriter, r *http.Request) {
 	//Вычисляем следующую дату
 	nextDate, err := scheduler.NextDate(now, date, repeat)
 	if err != nil {
-		//http.Error(w, errorJSON(err), http.StatusBadRequest)
+		log.Printf("NextDateHandler: %v %v %v %v; error: %v\n", now, date, repeat, nextDate, err)
 		w.WriteHeader(http.StatusBadRequest)
-		w.Write([]byte(""))
+		_, _ = w.Write([]byte(""))
 		return
 	}
-	log.Printf("NextDateHandler: %v %v %v %v\n", now, date, repeat, nextDate)
 
 	//Отправляем ответ
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(nextDate) /*jsonResp*/)
+	_, _ = w.Write([]byte(nextDate) /*jsonResp*/)
 }
 
 // GetTasks обработчик возвращает все задачи из БД в формате списка JSON либо,
 // при наличии параметра search, возвращает задачи по переданным параметрам
-func GetTasks(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		err := errors.New("method not supported")
-		http.Error(w, errorJSON(err), http.StatusMethodNotAllowed)
-		return
-	}
-
-	type params struct {
-		Date   string `db:"date"`
-		Search string `db:"search"`
-		Limit  int    `db:"limit"`
-	}
-	var (
-		err  error
-		date time.Time
-		args params
-	)
-	query := ""
-
-	// в зависимости от наличия и значения параметра search задаем соответствующий запрос и определяем его параметры
-	search := r.URL.Query().Get("search")
-	if search != "" {
-		if date, err = time.Parse("02.01.2006", search); err == nil {
-			query = "SELECT id, date, title, comment, repeat FROM scheduler WHERE date = :date LIMIT :limit"
-			args = params{Date: date.Format("20060102"), Limit: 50}
-		} else {
-			query = "SELECT id, date, title, comment, repeat FROM scheduler WHERE title LIKE :search OR comment LIKE :search ORDER BY date LIMIT :limit"
-			args = params{Search: "%" + search + "%", Limit: 50}
+func GetTasks(db *sqlx.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			err := errors.New("method not supported")
+			http.Error(w, errorJSON(err), http.StatusMethodNotAllowed)
+			return
 		}
-	} else {
-		query = "SELECT id, date, title, comment, repeat FROM scheduler ORDER BY date LIMIT 50"
-		args = params{Limit: 50}
-	}
 
-	log.Printf("Handler GetTasks: search = %v; args = %v\n", search, args)
-	tasks := []models.JsonTask{}
-	task := models.JsonTask{}
-	// Выполняем подготовленный запрос
-	rows, err := DB.NamedQuery(query, args)
-	if err != nil {
-		http.Error(w, errorJSON(err), http.StatusInternalServerError)
-		return
-	}
-	for rows.Next() {
-		err = rows.StructScan(&task)
+		store := database.NewTasksStore(db)
+		search := r.URL.Query().Get("search")
+		tasks, err := store.GetTasks(search)
+		if err != nil {
+			log.Printf("Handler GetTasks: search = %v; err = %v\n", search, err)
+			http.Error(w, errorJSON(err), http.StatusInternalServerError)
+		}
+
+		response := map[string][]models.Task{"tasks": tasks}
+		jsonResponse, err := json.MarshalIndent(response, "", "  ")
 		if err != nil {
 			http.Error(w, errorJSON(err), http.StatusInternalServerError)
 			return
 		}
-		tasks = append(tasks, task)
-	}
 
-	response := map[string][]models.JsonTask{"tasks": tasks}
-	jsonResponse, err := json.MarshalIndent(response, "", "  ")
-	if err != nil {
-		http.Error(w, errorJSON(err), http.StatusInternalServerError)
-		return
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(jsonResponse)
 	}
-	//log.Printf("Handler GetTasks: result = %v\n", response)
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	w.Write(jsonResponse)
 }
 
 // GetTaskByID обработчик возвращает задачу по переданному ID
-func GetTaskByID(w http.ResponseWriter, r *http.Request) {
-	idParam := r.URL.Query().Get("id")
-	if strings.TrimSpace(idParam) == "" {
-		err := errors.New("task ID not specified")
-		http.Error(w, errorJSON(err), http.StatusBadRequest)
-		return
-	}
+func GetTaskByID(db *sqlx.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		idParam := r.URL.Query().Get("id")
+		if strings.TrimSpace(idParam) == "" {
+			err := errors.New("task ID not specified")
+			log.Printf("Handler GetTaskByID: id = %v; error = %v\n", idParam, err)
+			http.Error(w, errorJSON(err), http.StatusBadRequest)
+			return
+		}
 
-	id, err := strconv.Atoi(idParam)
-	if err != nil {
-		http.Error(w, errorJSON(err), http.StatusBadRequest)
-		return
-	}
+		id, err := strconv.Atoi(idParam)
+		if err != nil {
+			http.Error(w, errorJSON(err), http.StatusBadRequest)
+			return
+		}
+		store := database.NewTasksStore(db)
+		task, err := store.GetTaskByID(id)
+		if err != nil {
+			log.Printf("Handler GetTaskByID: id = %v; task = %v; error = %v\n", id, task, err)
+			http.Error(w, errorJSON(err), http.StatusInternalServerError)
+			return
+		}
 
-	task, err := database.GetTaskByID(DB, id)
-	if err != nil {
-		http.Error(w, errorJSON(err), http.StatusInternalServerError)
-		return
-	}
-	log.Printf("Handler GetTaskByID: id = %v; task = %v\n", id, task)
+		resp, err := json.MarshalIndent(&task, "", "  ")
+		if err != nil {
+			log.Printf("Handler GetTaskByID: id = %v; task = %v; error = %v\n", id, task, err)
+			http.Error(w, errorJSON(err), http.StatusBadRequest)
+			return
+		}
 
-	resp, err := json.MarshalIndent(&task, "", "  ")
-	if err != nil {
-		http.Error(w, errorJSON(err), http.StatusBadRequest)
-		return
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(resp)
 	}
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	w.Write(resp)
 }
 
 // PostTask обработчик создает новую задачу по переданным в http-запросе параметрам,
 // записывая в БД с переданными параметрами и записывает в БД
-func PostTask(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		err := errors.New("method not supported")
-		http.Error(w, errorJSON(err), http.StatusMethodNotAllowed)
-		return
-	}
+func PostTask(db *sqlx.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			err := errors.New("method not supported")
+			http.Error(w, errorJSON(err), http.StatusMethodNotAllowed)
+			return
+		}
 
-	task := new(models.Task)
-	var buf bytes.Buffer
+		task := models.Task{}
+		var buf bytes.Buffer
 
-	_, err := buf.ReadFrom(r.Body)
-	if err != nil {
-		http.Error(w, errorJSON(err), http.StatusBadRequest)
-		return
-	}
-
-	if err = json.Unmarshal(buf.Bytes(), &task); err != nil {
-		http.Error(w, errorJSON(err), http.StatusBadRequest)
-		return
-	}
-
-	log.Printf("Handler PostTask: task = %v\n", task)
-
-	// проверяем корректность переданных параметров title, date, repeat, и корректируем при необходимости
-	if task.Title == "" {
-		err := errors.New("task title not specified")
-		http.Error(w, errorJSON(err), http.StatusBadRequest)
-		log.Println(err)
-		return
-	}
-
-	date := strings.TrimSpace(task.Date)
-	now := time.Now().Format("20060102")
-	nextDate := ""
-
-	if len(date) == 0 {
-		task.Date = now
-	} else {
-		begDate, err := time.Parse("20060102", date)
+		_, err := buf.ReadFrom(r.Body)
 		if err != nil {
+			log.Printf("Handler PostTask: buf = %v; error = %v\n", buf, err)
 			http.Error(w, errorJSON(err), http.StatusBadRequest)
 			return
 		}
-		if begDate.Before(time.Now()) {
-			if repeat := strings.TrimSpace(task.Repeat); repeat == "" {
-				task.Date = now
-			} else {
-				nextDate, err = scheduler.NextDate(now, date, task.Repeat)
-				if err != nil {
-					http.Error(w, errorJSON(err), http.StatusBadRequest)
-					return
+
+		if err = json.Unmarshal(buf.Bytes(), &task); err != nil {
+			log.Printf("Handler PostTask: task = %v; error = %v\n", task, err)
+			http.Error(w, errorJSON(err), http.StatusBadRequest)
+			return
+		}
+		// проверяем корректность переданных параметров title, date, repeat, и корректируем при необходимости
+		if task.Title == "" {
+			err := errors.New("task title not specified")
+			http.Error(w, errorJSON(err), http.StatusBadRequest)
+			log.Println(err)
+			return
+		}
+
+		date := strings.TrimSpace(task.Date)
+		now := time.Now().Format("20060102")
+		nextDate := ""
+
+		if len(date) == 0 {
+			task.Date = now
+		} else {
+			begDate, err := time.Parse("20060102", date)
+			if err != nil {
+				http.Error(w, errorJSON(err), http.StatusBadRequest)
+				return
+			}
+			if begDate.Before(time.Now()) {
+				if repeat := strings.TrimSpace(task.Repeat); repeat == "" {
+					task.Date = now
+				} else {
+					nextDate, err = scheduler.NextDate(now, date, task.Repeat)
+					if err != nil {
+						http.Error(w, errorJSON(err), http.StatusBadRequest)
+						return
+					}
+					task.Date = nextDate
 				}
-				task.Date = nextDate
 			}
 		}
-	}
 
-	resultDB, err := DB.NamedExec("INSERT INTO scheduler (date, title, comment, repeat) VALUES (:date, :title, :comment, :repeat)", &task)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	// Получаем ID последней вставленной записи, формируем JSON, в формате {"id":"186"} и отправляем ответ
-	lastID, err := resultDB.LastInsertId()
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	type TaskID struct {
-		ID int64 `json:"id"`
-	}
-	taskID := TaskID{ID: lastID}
-	//log.Printf("Handler PostTaskDone: result = %v\n", taskID)
+		store := database.NewTasksStore(db)
+		lastID, err := store.InsertTask(task)
+		if err != nil {
+			log.Printf("Handler PostTask: task = %v; error = %v\n", task, err)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		// Формируем JSON, в формате {"id":"186"} и отправляем ответ
+		taskID := TaskID{ID: lastID}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(taskID)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(taskID)
+	}
 }
 
 // PostTaskDone обработчик удаляет задачу по переданному ID если не задано правило повторения
 // либо обновляет дату следующего повторения по правилу указанному в задаче
-func PostTaskDone(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		err := errors.New("method not supported")
-		http.Error(w, errorJSON(err), http.StatusMethodNotAllowed)
-		return
-	}
-
-	idParam := r.URL.Query().Get("id")
-	if strings.TrimSpace(idParam) == "" {
-		err := errors.New("task ID not specified")
-		http.Error(w, errorJSON(err), http.StatusBadRequest)
-		return
-	}
-	id, err := strconv.Atoi(idParam)
-	if err != nil {
-		http.Error(w, errorJSON(err), http.StatusBadRequest)
-		return
-	}
-
-	// получаем задачу из БД по ID
-	task, err := database.GetTaskByID(DB, id)
-	if err != nil {
-		http.Error(w, errorJSON(err), http.StatusInternalServerError)
-		return
-	}
-	log.Printf("Handler PostTaskDone: id = %v; task = %v\n", id, task)
-
-	if strings.TrimSpace(task.Repeat) == "" {
-		if err := database.DeleteTaskByID(DB, id); err != nil {
-			http.Error(w, errorJSON(err), http.StatusInternalServerError)
-			return
-		} else {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusOK)
-			w.Write([]byte("{}"))
+func PostTaskDone(db *sqlx.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			err := errors.New("method not supported")
+			http.Error(w, errorJSON(err), http.StatusMethodNotAllowed)
 			return
 		}
-	}
-	// получаем новую дату повторения задачи и записываем в базу
-	now := time.Now().Add(time.Hour * 25).Format("20060102")
-	task.Date, err = scheduler.NextDate(now, task.Date, task.Repeat)
-	if err != nil {
-		http.Error(w, errorJSON(err), http.StatusInternalServerError)
-		return
 
-	}
+		idParam := r.URL.Query().Get("id")
+		if strings.TrimSpace(idParam) == "" {
+			err := errors.New("task ID not specified")
+			http.Error(w, errorJSON(err), http.StatusBadRequest)
+			return
+		}
+		id, err := strconv.Atoi(idParam)
+		if err != nil {
+			http.Error(w, errorJSON(err), http.StatusBadRequest)
+			return
+		}
 
-	_, err = DB.NamedExec("UPDATE scheduler SET date = :date, title = :title, comment = :comment, repeat = :repeat WHERE id = :id", &task)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	//log.Printf("Handler PutTask: result = %v\n", task)
+		store := database.NewTasksStore(db)
+		// получаем задачу из БД по ID
+		task, err := store.GetTaskByID(id)
+		if err != nil {
+			log.Printf("Handler PostTaskDone: id = %v; task = %v; error = %v\n", id, task, err)
+			http.Error(w, errorJSON(err), http.StatusInternalServerError)
+			return
+		}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	w.Write([]byte("{}"))
+		if strings.TrimSpace(task.Repeat) == "" {
+
+			if err := store.DeleteTaskByID(id); err != nil {
+				log.Printf("Handler PostTaskDone: id = %v; task = %v; error = %v\n", id, task, err)
+				http.Error(w, errorJSON(err), http.StatusInternalServerError)
+				return
+			}
+
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("{}"))
+			return
+		}
+		// получаем новую дату повторения задачи и записываем в базу
+		now := time.Now().Add(time.Hour * 25).Format("20060102")
+		task.Date, err = scheduler.NextDate(now, task.Date, task.Repeat)
+		if err != nil {
+			http.Error(w, errorJSON(err), http.StatusInternalServerError)
+			return
+
+		}
+
+		err = store.UpdateTask(task)
+		if err != nil {
+			log.Printf("Handler PostTaskDone: id = %v; task = %v; error = %v\n", id, task, err)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte("{}"))
+	}
 }
 
 // PutTask обработчик обновляет задачу переданными в json данными, получая ее из базы по ID
-func PutTask(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPut {
-		err := errors.New("method not supported")
-		http.Error(w, errorJSON(err), http.StatusMethodNotAllowed)
-		return
-	}
+func PutTask(db *sqlx.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut {
+			err := errors.New("method not supported")
+			http.Error(w, errorJSON(err), http.StatusMethodNotAllowed)
+			return
+		}
 
-	task := new(models.JsonTask)
-	var buf bytes.Buffer
+		task := models.Task{}
+		var buf bytes.Buffer
 
-	_, err := buf.ReadFrom(r.Body)
-	if err != nil {
-		http.Error(w, errorJSON(err), http.StatusBadRequest)
-		return
-	}
-
-	if err = json.Unmarshal(buf.Bytes(), &task); err != nil {
-		http.Error(w, errorJSON(err), http.StatusBadRequest)
-		return
-	}
-	log.Printf("Handler PutTask: task = %v\n", task)
-
-	idTask := strings.TrimSpace(task.ID)
-	if idTask == "" {
-		err := errors.New("task ID not specified")
-		http.Error(w, errorJSON(err), http.StatusBadRequest)
-		return
-	}
-
-	id, err := strconv.Atoi(idTask)
-	if err != nil {
-		http.Error(w, errorJSON(err), http.StatusBadRequest)
-		return
-	}
-	// Проверяем, существует ли задача с указанным ID в базе
-	if _, err := database.GetTaskByID(DB, id); err != nil {
-		http.Error(w, errorJSON(err), http.StatusBadRequest)
-		return
-	}
-	// проверяем корректность переданных параметров title, date, repeat, и корректируем при необходимости
-	if task.Title == "" {
-		err := errors.New("task title not specified")
-		http.Error(w, errorJSON(err), http.StatusBadRequest)
-		log.Println(err)
-		return
-	}
-
-	date := strings.TrimSpace(task.Date)
-	now := time.Now().Format("20060102")
-	nextDate := ""
-	if repeat := strings.TrimSpace(task.Repeat); repeat != "" {
-		nextDate, err = scheduler.NextDate(now, date, task.Repeat)
+		_, err := buf.ReadFrom(r.Body)
 		if err != nil {
 			http.Error(w, errorJSON(err), http.StatusBadRequest)
 			return
 		}
-	}
 
-	if len(date) == 0 {
-		task.Date = now
-	} else {
-		begDate, err := time.Parse("20060102", date)
+		if err = json.Unmarshal(buf.Bytes(), &task); err != nil {
+			log.Printf("Handler PutTask: task = %v; error = %v\n", task, err)
+			http.Error(w, errorJSON(err), http.StatusBadRequest)
+			return
+		}
+
+		idTask := strings.TrimSpace(task.ID)
+		if idTask == "" {
+			err := errors.New("task ID not specified")
+			http.Error(w, errorJSON(err), http.StatusBadRequest)
+			return
+		}
+
+		id, err := strconv.Atoi(idTask)
 		if err != nil {
 			http.Error(w, errorJSON(err), http.StatusBadRequest)
 			return
 		}
-		if begDate.Before(time.Now()) {
-			if repeat := strings.TrimSpace(task.Repeat); repeat == "" {
-				task.Date = now
-			} else {
-				task.Date = nextDate
+		store := database.NewTasksStore(db)
+		// Проверяем, существует ли задача с указанным ID в базе
+		if _, err := store.GetTaskByID(id); err != nil {
+			http.Error(w, errorJSON(err), http.StatusBadRequest)
+			return
+		}
+		// проверяем корректность переданных параметров title, date, repeat, и корректируем при необходимости
+		if task.Title == "" {
+			err := errors.New("task title not specified")
+			http.Error(w, errorJSON(err), http.StatusBadRequest)
+			log.Println(err)
+			return
+		}
+
+		date := strings.TrimSpace(task.Date)
+		now := time.Now().Format("20060102")
+		nextDate := ""
+		if repeat := strings.TrimSpace(task.Repeat); repeat != "" {
+			nextDate, err = scheduler.NextDate(now, date, task.Repeat)
+			if err != nil {
+				http.Error(w, errorJSON(err), http.StatusBadRequest)
+				return
 			}
 		}
-	}
 
-	_, err = DB.NamedExec("UPDATE scheduler SET date = :date, title = :title, comment = :comment, repeat = :repeat WHERE id = :id", &task)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
+		if len(date) == 0 {
+			task.Date = now
+		} else {
+			begDate, err := time.Parse("20060102", date)
+			if err != nil {
+				http.Error(w, errorJSON(err), http.StatusBadRequest)
+				return
+			}
+			if begDate.Before(time.Now()) {
+				if repeat := strings.TrimSpace(task.Repeat); repeat == "" {
+					task.Date = now
+				} else {
+					task.Date = nextDate
+				}
+			}
+		}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	w.Write([]byte("{}"))
+		err = store.UpdateTask(task)
+		if err != nil {
+			log.Printf("Handler PutTask: task = %v; error = %v\n", task, err)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte("{}"))
+	}
 }
 
 // DeleteTask обработчик удаляет задачу из базы по ID
-func DeleteTask(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodDelete {
-		err := errors.New("method not supported")
-		http.Error(w, errorJSON(err), http.StatusMethodNotAllowed)
-		return
-	}
+func DeleteTask(db *sqlx.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodDelete {
+			err := errors.New("method not supported")
+			http.Error(w, errorJSON(err), http.StatusMethodNotAllowed)
+			return
+		}
 
-	idParam := r.URL.Query().Get("id")
-	if strings.TrimSpace(idParam) == "" {
-		err := errors.New("task ID not specified")
-		http.Error(w, errorJSON(err), http.StatusBadRequest)
-		return
-	}
-	id, err := strconv.Atoi(idParam)
-	if err != nil {
-		http.Error(w, errorJSON(err), http.StatusBadRequest)
-		return
-	}
-	log.Printf("Handler DeleteTask: id = %v\n", id)
-	if err := database.DeleteTaskByID(DB, id); err != nil {
-		http.Error(w, errorJSON(err), http.StatusInternalServerError)
-		return
-	}
+		idParam := r.URL.Query().Get("id")
+		if strings.TrimSpace(idParam) == "" {
+			err := errors.New("task ID not specified")
+			http.Error(w, errorJSON(err), http.StatusBadRequest)
+			return
+		}
+		id, err := strconv.Atoi(idParam)
+		if err != nil {
+			http.Error(w, errorJSON(err), http.StatusBadRequest)
+			return
+		}
+		store := database.NewTasksStore(db)
+		if err := store.DeleteTaskByID(id); err != nil {
+			log.Printf("Handler DeleteTask: id = %v\n, error = %v\n", id, err)
+			http.Error(w, errorJSON(err), http.StatusInternalServerError)
+			return
+		}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	w.Write([]byte("{}"))
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte("{}"))
+	}
 }
 
 type Credentials struct {
@@ -442,8 +406,7 @@ func AuthHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	expectedPassword := os.Getenv("TODO_PASSWORD")
-	if creds.Password != expectedPassword {
+	if creds.Password != settings.EnvPass {
 		w.WriteHeader(http.StatusUnauthorized)
 		json.NewEncoder(w).Encode(Response{Error: "Invalid password"})
 		return
@@ -455,7 +418,7 @@ func AuthHandler(w http.ResponseWriter, r *http.Request) {
 		"checksum": fmt.Sprintf("%x", hash),
 	})
 
-	tokenString, err := token.SignedString(jwtSecretKey)
+	tokenString, err := token.SignedString(settings.JwtSecretKey)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(Response{Error: "Failed to generate token"})
@@ -471,8 +434,7 @@ func AuthHandler(w http.ResponseWriter, r *http.Request) {
 func AuthMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// смотрим наличие пароля
-		pass := os.Getenv("TODO_PASSWORD")
-		if len(pass) > 0 {
+		if len(settings.EnvPass) > 0 {
 			var tokenString string // JWT-токен из куки
 			// получаем куку
 			cookie, err := r.Cookie("token")
@@ -481,7 +443,7 @@ func AuthMiddleware(next http.Handler) http.Handler {
 			}
 			// здесь код для валидации и проверки JWT-токена
 			jwtToken, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
-				return jwtSecretKey, nil
+				return settings.JwtSecretKey, nil
 			})
 			if err != nil || !jwtToken.Valid {
 				http.Error(w, "Authentification required", http.StatusUnauthorized)
@@ -494,7 +456,7 @@ func AuthMiddleware(next http.Handler) http.Handler {
 				return
 			}
 			// проверяем контрольную сумму пароля
-			hash := sha256.Sum256([]byte(pass))
+			hash := sha256.Sum256([]byte(settings.EnvPass))
 			checksum := fmt.Sprintf("%x", hash)
 			if claims["checksum"] != checksum {
 				http.Error(w, "Authentification required", http.StatusUnauthorized)

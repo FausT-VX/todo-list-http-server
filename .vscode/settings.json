@@ -1,8 +1,0 @@
-{
-    "commentTranslate.targetLanguage": "ru",
-    "go.toolsEnvVars": {
-        "TODO_PORT": "7540",
-        "TODO_DBFILE": "./scheduler.db",
-        "TODO_PASSWORD": "123",
-    },
-}

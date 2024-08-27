@@ -25,7 +25,7 @@ func count(db *sqlx.DB) (int, error) {
 
 func openDB(t *testing.T) *sqlx.DB {
 	dbfile := DBFile
-	envFile := "." + os.Getenv("TODO_DBFILE") // тогда хотя бы так, чтоб переменную среды не комментировать перед тестами
+	envFile := os.Getenv("TODO_DBFILE")
 	if len(envFile) > 0 {
 		dbfile = envFile
 	}

@@ -23,7 +23,7 @@ COPY web/ ./web/
 COPY scheduler.db scheduler.db
 
 ENV TODO_PORT=7540
-ENV TODO_DBFILE=./scheduler.db
+ENV TODO_DBFILE=../scheduler.db
 ENV TODO_PASSWORD=123
 EXPOSE $TODO_PORT
 
