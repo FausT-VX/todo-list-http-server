@@ -18,7 +18,6 @@ import (
 	"github.com/FausT-VX/todo-list-server/service/scheduler"
 	"github.com/FausT-VX/todo-list-server/settings"
 	"github.com/golang-jwt/jwt"
-	"github.com/jmoiron/sqlx"
 )
 
 type Claims struct {
@@ -56,7 +55,7 @@ func NextDateHandler(w http.ResponseWriter, r *http.Request) {
 
 // GetTasks обработчик возвращает все задачи из БД в формате списка JSON либо,
 // при наличии параметра search, возвращает задачи по переданным параметрам
-func GetTasks(db *sqlx.DB) http.HandlerFunc {
+func GetTasks(store database.TasksStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			err := errors.New("method not supported")
@@ -64,7 +63,6 @@ func GetTasks(db *sqlx.DB) http.HandlerFunc {
 			return
 		}
 
-		store := database.NewTasksStore(db)
 		search := r.URL.Query().Get("search")
 		tasks, err := store.GetTasks(search)
 		if err != nil {
@@ -86,7 +84,7 @@ func GetTasks(db *sqlx.DB) http.HandlerFunc {
 }
 
 // GetTaskByID обработчик возвращает задачу по переданному ID
-func GetTaskByID(db *sqlx.DB) http.HandlerFunc {
+func GetTaskByID(store database.TasksStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		idParam := r.URL.Query().Get("id")
 		if strings.TrimSpace(idParam) == "" {
@@ -101,7 +99,6 @@ func GetTaskByID(db *sqlx.DB) http.HandlerFunc {
 			http.Error(w, errorJSON(err), http.StatusBadRequest)
 			return
 		}
-		store := database.NewTasksStore(db)
 		task, err := store.GetTaskByID(id)
 		if err != nil {
 			log.Printf("Handler GetTaskByID: id = %v; task = %v; error = %v\n", id, task, err)
@@ -124,7 +121,7 @@ func GetTaskByID(db *sqlx.DB) http.HandlerFunc {
 
 // PostTask обработчик создает новую задачу по переданным в http-запросе параметрам,
 // записывая в БД с переданными параметрами и записывает в БД
-func PostTask(db *sqlx.DB) http.HandlerFunc {
+func PostTask(store database.TasksStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			err := errors.New("method not supported")
@@ -156,13 +153,13 @@ func PostTask(db *sqlx.DB) http.HandlerFunc {
 		}
 
 		date := strings.TrimSpace(task.Date)
-		now := time.Now().Format("20060102")
+		now := time.Now().Format(settings.DateFormat)
 		nextDate := ""
 
 		if len(date) == 0 {
 			task.Date = now
 		} else {
-			begDate, err := time.Parse("20060102", date)
+			begDate, err := time.Parse(settings.DateFormat, date)
 			if err != nil {
 				http.Error(w, errorJSON(err), http.StatusBadRequest)
 				return
@@ -181,7 +178,6 @@ func PostTask(db *sqlx.DB) http.HandlerFunc {
 			}
 		}
 
-		store := database.NewTasksStore(db)
 		lastID, err := store.InsertTask(task)
 		if err != nil {
 			log.Printf("Handler PostTask: task = %v; error = %v\n", task, err)
@@ -199,7 +195,7 @@ func PostTask(db *sqlx.DB) http.HandlerFunc {
 
 // PostTaskDone обработчик удаляет задачу по переданному ID если не задано правило повторения
 // либо обновляет дату следующего повторения по правилу указанному в задаче
-func PostTaskDone(db *sqlx.DB) http.HandlerFunc {
+func PostTaskDone(store database.TasksStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			err := errors.New("method not supported")
@@ -219,7 +215,6 @@ func PostTaskDone(db *sqlx.DB) http.HandlerFunc {
 			return
 		}
 
-		store := database.NewTasksStore(db)
 		// получаем задачу из БД по ID
 		task, err := store.GetTaskByID(id)
 		if err != nil {
@@ -242,7 +237,7 @@ func PostTaskDone(db *sqlx.DB) http.HandlerFunc {
 			return
 		}
 		// получаем новую дату повторения задачи и записываем в базу
-		now := time.Now().Add(time.Hour * 25).Format("20060102")
+		now := time.Now().Add(time.Hour * 25).Format(settings.DateFormat)
 		task.Date, err = scheduler.NextDate(now, task.Date, task.Repeat)
 		if err != nil {
 			http.Error(w, errorJSON(err), http.StatusInternalServerError)
@@ -264,7 +259,7 @@ func PostTaskDone(db *sqlx.DB) http.HandlerFunc {
 }
 
 // PutTask обработчик обновляет задачу переданными в json данными, получая ее из базы по ID
-func PutTask(db *sqlx.DB) http.HandlerFunc {
+func PutTask(store database.TasksStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPut {
 			err := errors.New("method not supported")
@@ -299,7 +294,6 @@ func PutTask(db *sqlx.DB) http.HandlerFunc {
 			http.Error(w, errorJSON(err), http.StatusBadRequest)
 			return
 		}
-		store := database.NewTasksStore(db)
 		// Проверяем, существует ли задача с указанным ID в базе
 		if _, err := store.GetTaskByID(id); err != nil {
 			http.Error(w, errorJSON(err), http.StatusBadRequest)
@@ -314,7 +308,7 @@ func PutTask(db *sqlx.DB) http.HandlerFunc {
 		}
 
 		date := strings.TrimSpace(task.Date)
-		now := time.Now().Format("20060102")
+		now := time.Now().Format(settings.DateFormat)
 		nextDate := ""
 		if repeat := strings.TrimSpace(task.Repeat); repeat != "" {
 			nextDate, err = scheduler.NextDate(now, date, task.Repeat)
@@ -327,7 +321,7 @@ func PutTask(db *sqlx.DB) http.HandlerFunc {
 		if len(date) == 0 {
 			task.Date = now
 		} else {
-			begDate, err := time.Parse("20060102", date)
+			begDate, err := time.Parse(settings.DateFormat, date)
 			if err != nil {
 				http.Error(w, errorJSON(err), http.StatusBadRequest)
 				return
@@ -355,7 +349,7 @@ func PutTask(db *sqlx.DB) http.HandlerFunc {
 }
 
 // DeleteTask обработчик удаляет задачу из базы по ID
-func DeleteTask(db *sqlx.DB) http.HandlerFunc {
+func DeleteTask(store database.TasksStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodDelete {
 			err := errors.New("method not supported")
@@ -374,7 +368,6 @@ func DeleteTask(db *sqlx.DB) http.HandlerFunc {
 			http.Error(w, errorJSON(err), http.StatusBadRequest)
 			return
 		}
-		store := database.NewTasksStore(db)
 		if err := store.DeleteTaskByID(id); err != nil {
 			log.Printf("Handler DeleteTask: id = %v\n, error = %v\n", id, err)
 			http.Error(w, errorJSON(err), http.StatusInternalServerError)

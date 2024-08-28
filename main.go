@@ -26,6 +26,7 @@ func main() {
 		return
 	}
 	defer db.Close()
+	store := database.NewTasksStore(db)
 	// инициализация маршрутизатора
 	router := chi.NewRouter()
 
@@ -40,13 +41,13 @@ func main() {
 	//apiRouter.Use(middleware.Logger)
 	apiRouter.Use(middleware.Recoverer)
 	apiRouter.Use(handlers.AuthMiddleware)
-	apiRouter.Get("/tasks", handlers.GetTasks(db))
+	apiRouter.Get("/tasks", handlers.GetTasks(store))
 	apiRouter.Route("/task", func(r chi.Router) {
-		r.Get("/", handlers.GetTaskByID(db))
-		r.Post("/", handlers.PostTask(db))
-		r.Post("/done", handlers.PostTaskDone(db))
-		r.Put("/", handlers.PutTask(db))
-		r.Delete("/", handlers.DeleteTask(db))
+		r.Get("/", handlers.GetTaskByID(store))
+		r.Post("/", handlers.PostTask(store))
+		r.Post("/done", handlers.PostTaskDone(store))
+		r.Put("/", handlers.PutTask(store))
+		r.Delete("/", handlers.DeleteTask(store))
 	})
 	router.Mount("/api", apiRouter)
 	router.Post("/api/signin", handlers.AuthHandler)

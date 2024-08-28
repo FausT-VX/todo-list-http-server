@@ -141,7 +141,7 @@ func (s TasksStore) GetTasks(search string) ([]models.Task, error) {
 	if search != "" {
 		if date, err := time.Parse("02.01.2006", search); err == nil {
 			query = "SELECT id, date, title, comment, repeat FROM scheduler WHERE date = :date LIMIT :limit"
-			args = params{Date: date.Format("20060102"), Limit: settings.Limit50}
+			args = params{Date: date.Format(settings.DateFormat), Limit: settings.Limit50}
 		} else {
 			query = "SELECT id, date, title, comment, repeat FROM scheduler WHERE title LIKE :search OR comment LIKE :search ORDER BY date LIMIT :limit"
 			args = params{Search: "%" + search + "%", Limit: settings.Limit50}

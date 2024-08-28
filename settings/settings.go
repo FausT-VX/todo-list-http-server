@@ -12,9 +12,7 @@ const (
 
 // Лимиты на получение строк в SQL-запросах
 const (
-	Limit10  int = 50
-	Limit50  int = 50
-	Limit100 int = 100
+	Limit50 int = 50
 )
 
 var EnvDBFile = os.Getenv("TODO_DBFILE") // Файл БД из переменной окружения TODO_DBFILE

@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/FausT-VX/todo-list-server/settings"
 )
 
 // Структура правил повторения задачи
@@ -32,13 +34,13 @@ func LastDayOfMonth(date time.Time) int {
 //	repeat — правило повторения
 func NextDate(now string, date string, repeat string) (string, error) {
 	date = strings.TrimSpace(date)
-	begDate, err := time.Parse("20060102", date)
+	begDate, err := time.Parse(settings.DateFormat, date)
 	if err != nil {
 		return "", err
 	}
 
 	now = strings.TrimSpace(now)
-	nowDate, err := time.Parse("20060102", now)
+	nowDate, err := time.Parse(settings.DateFormat, now)
 	if err != nil {
 		return "", err
 	}
@@ -130,7 +132,7 @@ func NextDate(now string, date string, repeat string) (string, error) {
 		nextDate = greaterDate.AddDate(0, 0, minDiff)
 	}
 
-	return nextDate.Format("20060102"), nil
+	return nextDate.Format(settings.DateFormat), nil
 }
 
 // ParseRepeat парсит правило повторения задач repeat и возвращает результат в виде структуры RepeatRules
