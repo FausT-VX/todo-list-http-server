@@ -289,16 +289,6 @@ func PutTask(store database.TasksStore) http.HandlerFunc {
 			return
 		}
 
-		id, err := strconv.Atoi(idTask)
-		if err != nil {
-			http.Error(w, errorJSON(err), http.StatusBadRequest)
-			return
-		}
-		// Проверяем, существует ли задача с указанным ID в базе
-		if _, err := store.GetTaskByID(id); err != nil {
-			http.Error(w, errorJSON(err), http.StatusBadRequest)
-			return
-		}
 		// проверяем корректность переданных параметров title, date, repeat, и корректируем при необходимости
 		if task.Title == "" {
 			err := errors.New("task title not specified")
@@ -338,7 +328,7 @@ func PutTask(store database.TasksStore) http.HandlerFunc {
 		err = store.UpdateTask(task)
 		if err != nil {
 			log.Printf("Handler PutTask: task = %v; error = %v\n", task, err)
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			http.Error(w, errorJSON(err), http.StatusInternalServerError)
 			return
 		}
 

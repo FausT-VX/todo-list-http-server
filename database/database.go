@@ -174,9 +174,16 @@ func (s TasksStore) GetTasks(search string) ([]models.Task, error) {
 
 // UpdateTask - обновление задачи по id
 func (s TasksStore) UpdateTask(task models.Task) error {
-	_, err := s.db.NamedExec("UPDATE scheduler SET date = :date, title = :title, comment = :comment, repeat = :repeat WHERE id = :id", &task)
+	result, err := s.db.NamedExec("UPDATE scheduler SET date = :date, title = :title, comment = :comment, repeat = :repeat WHERE id = :id", &task)
 	if err != nil {
 		return err
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rowsAffected == 0 {
+		return errors.New("task not found")
 	}
 	return nil
 }
